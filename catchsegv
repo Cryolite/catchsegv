@@ -87,23 +87,62 @@ if test -s "$segv_output"; then
   sed '/Backtrace/q' "$segv_output"
   sed '1,/Backtrace/d' "$segv_output" | sed '/Memory map:/q' |
   (while read line; do
-     if echo -n "$line" | grep -Fq "$prog["; then
-       line=`echo $line | sed "s@^$prog\\(\\[.*\\)@\1@"`
-       addr=`echo "$line" | sed 's/^\[\(.*\)\]$/\1/'`
-       complete=`addr2line -f --demangle -e "$prog" $addr 2>/dev/null`
+     if echo -n "$line" | grep -Fq "$prog"; then
+       exe=`echo -n "$line" | sed 's/([^(]\{1,\})//' | sed 's/\[0x[[:xdigit:]]\{1,\}\]//'`
+       exe=`readlink --canonicalize-existing "$exe" 2>/dev/null`
        if test $? -eq 0; then
-	 echo "`echo "$complete"|sed 'N;s/\(.*\)\n\(.*\)/\2: \1/;'`$line"
-       else
-	 echo "$line"
+         if test -f "$exe" -a -e "$exe"; then
+           addr=`echo -n "$line" | sed 's/.*\[\(0x[[:xdigit:]]\{1,\}\)\]$/\1/'`
+           addr2line=`addr2line --exe="$exe" --functions --demangle $addr 2>/dev/null`
+           if test $? -eq 0; then
+             if echo -n "$addr2line" | grep -Eq '^\?\?:0'; then
+               :
+             else
+               func=`echo "$addr2line" | head --lines=1`
+               fileline=`echo "$addr2line" | tail --lines=1`
+               file=`echo -n "$fileline" | sed 's/:[[:digit:]]\{1,\}$//'`
+               if test -f "$file"; then
+                 line="$fileline: $func"
+               fi
+             fi
+           fi
+         fi
        fi
-     elif echo -n "$line" | grep -Eq ".*\\(.*\\)\\[.*\\]"; then
-       funcname=`echo $line | sed 's/.*(\(.*\)+0x[[:xdigit:]]\{1,\})\[.*\]/\1/'`
-       funcname=`c++filt "$funcname"`
-       line=`echo $line | sed "s@\\(.*\\)(.*+0x[[:xdigit:]]\\{1,\\})\\[\\(.*\\)\\]@\1: ${funcname}[\2]@"`
-       echo "$line"
      else
-       echo "$line"
+       exe=`echo -n "$line" | sed 's/([^(]\{1,\})//' | sed 's/\[0x[[:xdigit:]]\{1,\}\]//'`
+       exe=`readlink --canonicalize-existing "$exe" 2>/dev/null`
+       if test $? -eq 0; then
+         if test -f "$exe" -a -e "$exe"; then
+           addr=`echo -n "$line" | sed 's/.*\[\(0x[[:xdigit:]]\{1,\}\)\]$/\1/'`
+           addr=`printf '%d' $addr 2>/dev/null`
+           if test $? -eq 0; then
+             mmap=`grep -F "$exe" "$segv_output" | grep -E ' 0+ '`
+             if test $? -eq 0; then
+               baseaddr=`echo -n "$mmap" | grep -Eo '^[[:xdigit:]]+'`
+               baseaddr=`printf '%d' 0x$baseaddr 2>/dev/null`
+               if test $? -eq 0; then
+                 addr=`expr $addr - $baseaddr`
+                 addr=`printf '%x' $addr`
+                 addr2line=`addr2line --exe="$exe" --functions --demangle $addr 2>/dev/null`
+                 if test $? -eq 0; then
+                   if echo -n "$addr2line" | grep -Eq '^\?\?:0'; then
+                     :
+                   else
+                     func=`echo "$addr2line" | head --lines=1`
+                     fileline=`echo "$addr2line" | tail --lines=1`
+                     file=`echo -n "$fileline" | sed 's/:[[:digit:]]\{1,\}$//'`
+                     if test -f "$file"; then
+                       line="$fileline: $func"
+                     fi
+                   fi
+                 fi
+               fi
+             fi
+           fi
+         fi
+       fi
      fi
+     echo "$line"
    done)
   sed '1,/Memory map:/d' "$segv_output"
 fi
